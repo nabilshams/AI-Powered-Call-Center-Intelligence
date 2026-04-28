@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: call-center-intelligence
+metadata:
+  template: call-center-intelligence@0.0.1-beta
+
+# Azure Developer CLI (azd) configuration
+# Run 'azd up' to provision and deploy, 'azd down' to clean up
+
+infra:
+  provider: bicep
+  path: ./infra
+  module: main
+
+# Service definitions for deployment
+services:
+  frontend:
+    project: ./call-intelligence-realtime/web-app-frontend
+    language: js
+    host: appservice
+    hooks:
+      prepackage:
+        windows:
+          shell: pwsh
+          run: |
+            Write-Host "Building React frontend..."
+            npm install
+            npm run build
+        posix:
+          shell: sh
+          run: |
+            echo "Building React frontend..."
+            npm install
+            npm run build
+    dist: build
+
+  backend:
+    project: ./call-intelligence-realtime/ai-app-backend
+    language: js
+    host: appservice
+    hooks:
+      prepackage:
+        windows:
+          shell: pwsh
+          run: |
+            Write-Host "Installing backend dependencies..."
+            npm install --production
+        posix:
+          shell: sh
+          run: |
+            echo "Installing backend dependencies..."
+            npm install --production
+
+# Hook to run after provisioning - deploys ARM template for batch pipeline
+hooks:
+  postprovision:
+    windows:
+      shell: pwsh
+      run: |
+        Write-Host "============================================"
+        Write-Host "AI Services provisioned successfully!"
+        Write-Host "============================================"
+        Write-Host ""
+        Write-Host "Deploying batch transcription pipeline (ArmTemplateBatch.json)..."
+        Write-Host ""
+        
+        # Generate a unique storage account name based on environment
+        $storageAccountName = "stcallcenter" + $env:AZURE_ENV_NAME.ToLower().Substring(0, [Math]::Min(10, $env:AZURE_ENV_NAME.Length)) -replace '[^a-z0-9]',''
+        $storageAccountName = $storageAccountName.Substring(0, [Math]::Min(24, $storageAccountName.Length))
+        
+        Write-Host "Storage Account Name: $storageAccountName"
+        
+        # Deploy ARM template with values from Bicep deployment
+        az deployment group create `
+          --resource-group $env:AZURE_RESOURCE_GROUP `
+          --template-file "call-intelligence-realtime/ai-app-backend/Template/ArmTemplateBatch.json" `
+          --parameters `
+            StorageAccount=$storageAccountName `
+            AzureSpeechServicesKey=$env:AZURE_SPEECH_SERVICES_KEY `
+            AzureSpeechServicesRegion=$env:AZURE_SPEECH_SERVICES_REGION `
+            TextAnalyticsKey=$env:AZURE_LANGUAGE_SERVICES_KEY `
+            TextAnalyticsEndpoint=$env:AZURE_LANGUAGE_SERVICES_ENDPOINT
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host ""
+          Write-Host "============================================"
+          Write-Host "Batch pipeline deployed successfully!"
+          Write-Host "============================================"
+          Write-Host ""
+          Write-Host "Resources created:"
+          Write-Host "  - Storage Account: $storageAccountName"
+          Write-Host "  - Service Bus with transcription queues"
+          Write-Host "  - Azure Functions (Start/Fetch Transcription)"
+          Write-Host "  - Event Grid for blob triggers"
+          Write-Host "  - Key Vault with secrets"
+          Write-Host "  - Application Insights"
+          Write-Host ""
+          Write-Host "Run 'azd env get-values' to see all environment values"
+        } else {
+          Write-Host "ARM template deployment failed!" -ForegroundColor Red
+          exit 1
+        }
+    posix:
+      shell: sh
+      run: |
+        echo "============================================"
+        echo "AI Services provisioned successfully!"
+        echo "============================================"
+        echo ""
+        echo "Deploying batch transcription pipeline (ArmTemplateBatch.json)..."
+        echo ""
+        
+        # Generate a unique storage account name based on environment
+        STORAGE_ACCOUNT_NAME="stcallcenter$(echo $AZURE_ENV_NAME | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | cut -c1-10)"
+        STORAGE_ACCOUNT_NAME=$(echo $STORAGE_ACCOUNT_NAME | cut -c1-24)
+        
+        echo "Storage Account Name: $STORAGE_ACCOUNT_NAME"
+        
+        # Deploy ARM template with values from Bicep deployment
+        az deployment group create \
+          --resource-group "$AZURE_RESOURCE_GROUP" \
+          --template-file "call-intelligence-realtime/ai-app-backend/Template/ArmTemplateBatch.json" \
+          --parameters \
+            StorageAccount="$STORAGE_ACCOUNT_NAME" \
+            AzureSpeechServicesKey="$AZURE_SPEECH_SERVICES_KEY" \
+            AzureSpeechServicesRegion="$AZURE_SPEECH_SERVICES_REGION" \
+            TextAnalyticsKey="$AZURE_LANGUAGE_SERVICES_KEY" \
+            TextAnalyticsEndpoint="$AZURE_LANGUAGE_SERVICES_ENDPOINT"
+        
+        if [ $? -eq 0 ]; then
+          echo ""
+          echo "============================================"
+          echo "Batch pipeline deployed successfully!"
+          echo "============================================"
+          echo ""
+          echo "Resources created:"
+          echo "  - Storage Account: $STORAGE_ACCOUNT_NAME"
+          echo "  - Service Bus with transcription queues"
+          echo "  - Azure Functions (Start/Fetch Transcription)"
+          echo "  - Event Grid for blob triggers"
+          echo "  - Key Vault with secrets"
+          echo "  - Application Insights"
+          echo ""
+          echo "Run 'azd env get-values' to see all environment values"
+        else
+          echo "ARM template deployment failed!"
+          exit 1
+        fi
